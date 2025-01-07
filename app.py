@@ -2,54 +2,58 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-from tensorflow.keras.models import load_model
+import tensorflow as tf
+from xgboost import XGBClassifier
 
 # Load models and preprocessor
-nn_model = load_model("nn_model.keras")
-hybrid_model = joblib.load("hybrid_model.pkl")
-preprocessor = joblib.load("preprocessor.pkl")
+@st.cache_resource
+def load_models():
+    preprocessor = joblib.load("preprocessor.pkl")
+    nn_model = tf.keras.models.load_model("nn_model.keras")
+    xgb_model = joblib.load("hybrid_model.pkl")
+    return preprocessor, nn_model, xgb_model
 
-# Title
-st.title("Employee Attrition Prediction")
+# Prediction function
+def predict_attrition(data, preprocessor, nn_model, xgb_model):
+    processed_data = preprocessor.transform(data)
+    nn_predictions = nn_model.predict(processed_data)
+    xgb_predictions = xgb_model.predict_proba(processed_data)[:, 1]
+    hybrid_predictions = (nn_predictions.flatten() + xgb_predictions) / 2
+    return (hybrid_predictions >= 0.5).astype(int), hybrid_predictions
 
-# Sidebar Inputs
-st.sidebar.header("Employee Features")
-age = st.sidebar.slider("Age", 18, 65, 30)
-monthly_income = st.sidebar.number_input("Monthly Income (e.g., 5000)", min_value=1000, step=500)
-overtime = st.sidebar.selectbox("OverTime (Yes/No)", ["Yes", "No"])
-environment_satisfaction = st.sidebar.slider("Environment Satisfaction (1-4)", 1, 4, 3)
-relationship_satisfaction = st.sidebar.slider("Relationship Satisfaction (1-4)", 1, 4, 3)
-percent_salary_hike = st.sidebar.slider("Percent Salary Hike (%)", 0, 50, 10)
-years_with_curr_manager = st.sidebar.slider("Years with Current Manager", 0, 20, 5)
-job_involvement = st.sidebar.slider("Job Involvement (1-4)", 1, 4, 3)
+# Main Streamlit app
+def main():
+    st.title("Employee Attrition Prediction App")
+    st.write(
+        """
+        This app uses a hybrid Neural Network and XGBoost model to predict employee attrition.
+        Upload your dataset to get predictions.
+        """
+    )
 
-# Convert input into DataFrame
-input_data = pd.DataFrame({
-    "Age": [age],
-    "MonthlyIncome": [monthly_income],
-    "OverTime": [1 if overtime == "Yes" else 0],
-    "EnvironmentSatisfaction": [environment_satisfaction],
-    "RelationshipSatisfaction": [relationship_satisfaction],
-    "PercentSalaryHike": [percent_salary_hike],
-    "YearsWithCurrManager": [years_with_curr_manager],
-    "JobInvolvement": [job_involvement],
-})
+    # Upload dataset
+    uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+    if uploaded_file:
+        data = pd.read_csv(uploaded_file)
+        st.write("Uploaded Dataset:")
+        st.write(data.head())
 
-# Preprocess input data
-input_array = preprocessor.transform(input_data)
+        # Load models
+        preprocessor, nn_model, xgb_model = load_models()
 
-# Predict using Neural Network
-nn_predictions = nn_model.predict(input_array).flatten()
+        # Predict attrition
+        if st.button("Predict"):
+            predictions, scores = predict_attrition(data, preprocessor, nn_model, xgb_model)
+            data["Attrition Prediction"] = predictions
+            data["Attrition Probability"] = scores
+            st.write("Predictions:")
+            st.write(data[["Attrition Prediction", "Attrition Probability"]])
+            st.download_button(
+                label="Download Predictions",
+                data=data.to_csv(index=False).encode("utf-8"),
+                file_name="attrition_predictions.csv",
+                mime="text/csv"
+            )
 
-# Create hybrid features
-input_hybrid = np.column_stack((input_array, nn_predictions))
-
-# Predict using Hybrid NN-XGBoost
-hybrid_predictions = hybrid_model.predict(input_hybrid)
-
-# Display predictions
-st.subheader("Prediction Results")
-if hybrid_predictions[0] == 1:
-    st.write("The employee is likely to leave the company.")
-else:
-    st.write("The employee is likely to stay in the company.")
+if __name__ == "__main__":
+    main()
